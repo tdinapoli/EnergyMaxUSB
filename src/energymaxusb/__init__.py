@@ -1,2 +1,3 @@
-def main() -> None:
-    print("Hello from energymaxusb!")
+from . import sensor
+
+__all__ = ["sensor"]
