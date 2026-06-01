@@ -1,7 +1,8 @@
 import logging
-from typing import Literal
+from typing import Literal, Optional, TypedDict
 
 from pyvisa.resources import MessageBasedResource
+import pyvisa
 
 logger = logging.getLogger(__name__)
 
@@ -9,104 +10,186 @@ MeasureType = Literal["DEFAULT", "J", "W"]
 TriggerSource = Literal["DEFAULT", "INTERNAL", "EXTERNAL"]
 TriggerSlope = Literal["DEFAULT", "POSITIVE", "NEGATIVE"]
 
+# these are:
+# energy,
+# period,
+# flags (P: peak clip error, B: baseline clip error, M: missed pulse, D: dirty batch, 0: OK),
+# sequence ID (number of trigger)
+ReadValue = Literal["PULS", "PER", "FLAG", "SEQ"]
+Flags = Literal["P", "B", "M", "D"]
+
+
+class ReadDict(TypedDict, total=False):
+    PULS: Optional[float]
+    PER: Optional[int]
+    FLAG: Optional[str]
+    SEQ: Optional[int]
+
 
 class EnergyMaxUSB:
-    # pm1 model: "EM-USB J-10MB-HE"
-    # pm1 serial: "0344D22R"
     def __init__(self, em: MessageBasedResource, model: str, serial: str) -> None:
         self.em = em
 
-        self.model = self.em.query("SYSTEM:INFORMATION:MODEL?")
+        self.model = self.send_command("SYSTEM:INFORMATION:MODEL?")
         assert self.model == model
-        self.serial = self.em.query("SYSTEM:INFORMATION:SNUMBER?")
-        assert self.em.query("*IDN?") == serial
+        self.serial = self.send_command("SYSTEM:INFORMATION:SNUMBER?")
+        assert self.serial == serial
 
-        self._min_wl = int(self.em.query("CONFIGURE:WAVELENGTH? MINIMUM"))
-        self._max_wl = int(self.em.query("CONFIGURE:WAVELENGTH? MAXIMUM"))
-        self._current_wl = self.em.query("CONFIGURE:WAVELENGTH?")
+        self._min_wl = int(self.send_command("CONFIGURE:WAVELENGTH? MINIMUM"))
+        self._max_wl = int(self.send_command("CONFIGURE:WAVELENGTH? MAXIMUM"))
+        self._current_wl = self.send_command("CONFIGURE:WAVELENGTH?")
         self.set_measure_type("J")
 
-    def parse_read(self, response: str) -> float:
-        # TODO: implement this
-        return response
+        # TODO: put this in a method
+        self.set_read_values(["PULS", "PER", "FLAG", "SEQ"])
+        self.set_trigger_slope("POSITIVE")
+        self.set_trigger_source("EXTERNAL")
+        self.set_trigger_delay(0)
 
-    def read(self) -> float | None:
-        resp = self.em.query("READ?")
-        if self.query_succeded(resp, "read measurement"):
-            logger.info("Reading measurment with value {resp}")
-            return self.parse_read(resp)
+    @classmethod
+    def constructor_default(
+        cls, position: Literal["before_sample", "after_sample"] = "before_sample"
+    ):
+        match position:
+            case "before_sample":
+                model = '"EM-USB J-10MB-HE"'
+                serial = '"0344D22R"'
+                resource_name = "ASRL6::INSTR"
+            case "after_sample":
+                model = '"EM-USB J-25MB-HE"'
+                serial = '"0071F22R"'
+                resource_name = "ASRL5::INSTR"
+            case _:
+                raise ValueError(
+                    f"Invalid position {position}. Should be either before_sample or after_sample"
+                )
+        rm = pyvisa.ResourceManager("@py")
+        em: MessageBasedResource = rm.open_resource(resource_name)
+        return cls(em, model, serial)
 
-    def set_measure_type(self, typ: MeasureType):
-        resp = self.em.query(f"CONFIGURE:MEASURE:TYPE {typ}")
-        if self.query_succeded(resp, "set measure type"):
-            logger.info("Setting measure type to {typ}")
-            return resp
+    def send_command(self, command: str) -> str:
+        is_query = "?" in command.strip()
+        logger.info(f"sending command {command} to energy meter {self.serial}")
+
+        self.em.write(command)
+
+        resp = ""
+        if is_query:
+            resp = self.em.read().strip()
+            success = self.em.read().strip()
+        else:
+            success = self.em.read().strip()
+
+        if success != "OK":
+            logger.error(
+                "failed to communicate command {command} to energy meter {self.serial}"
+            )
+            resp = ""
         return resp
 
+    def get_energy(self) -> float | None:
+        read_dict = self.read()
+        if "PULS" in read_dict.keys():
+            return read_dict["PULS"]
+        logger.error(
+            f"Tried to get PULS from read dict with keys {list(read_dict.keys())}"
+        )
+
+    def get_period(self) -> int | None:
+        read_dict = self.read()
+        if "PULS" in read_dict.keys():
+            return read_dict["PER"]
+        logger.error(
+            f"Tried to get PER from read dict with keys {list(read_dict.keys())}"
+        )
+
+    def get_sequence(self) -> int | None:
+        read_dict = self.read()
+        if "PULS" in read_dict.keys():
+            return read_dict["SEQ"]
+        logger.error(
+            f"Tried to get SEQ from read dict with keys {list(read_dict.keys())}"
+        )
+
+    def get_sequence(self) -> int | None:
+        read_dict = self.read()
+        if "PULS" in read_dict.keys():
+            return read_dict["SEQ"]
+        logger.error(
+            f"Tried to get SEQ from read dict with keys {list(read_dict.keys())}"
+        )
+
+    def read(self) -> ReadDict:
+        resp = self.send_command("READ?").split(",")
+        read_values = self.get_read_values()
+        read_dict: ReadDict = {}
+        if "FLAG" in read_values:
+            flags = resp[read_values.index("FLAG")]
+
+            if "0" not in flags:
+                if "P" in flags:
+                    logger.error(f"peak clip error for energy meter {self.serial}")
+                if "B" in flags:
+                    logger.error(f"baseline clip error for energy meter {self.serial}")
+                if "M" in flags:
+                    logger.error(f"missed pulse error for energy meter {self.serial}")
+                if "D" in flags:
+                    logger.error(f"dirty batch error for energy meter {self.serial}")
+
+            read_dict["FLAG"] = flags
+
+        if "PULS" in read_values:
+            read_dict["PULS"] = float(read_values[read_values.index("PULS")])
+
+        if "SEQ" in read_values:
+            read_dict["SEQ"] = int(read_values[read_values.index("SEQ")])
+
+        if "PER" in read_values:
+            read_dict["PER"] = int(read_values[read_values.index("PER")])
+
+        return read_dict
+
+    def set_read_values(self, values: list[ReadValue]):
+        if len(values) == 0 or len(values) > 4:
+            logger.error(f"Invalid amount of values {len(values)}. Min 1, max 4")
+            return
+        self.send_command(f"CONFIGURE:ITEMSELECT {','.join(values)}")
+
+    def get_read_values(self):
+        return self.send_command("CONFIGURE:ITEMSELECT?")
+
+    def set_measure_type(self, typ: MeasureType):
+        self.send_command(f"CONFIGURE:MEASURE:TYPE {typ}")
+
     def get_measure_type(self) -> str:
-        resp = self.em.query("CONFIGURE:MEASURE:TYPE?")
-        if self.query_succeded(resp, "get measure type"):
-            logger.info("Getting measure type")
-            return resp
+        resp = self.send_command("CONFIGURE:MEASURE:TYPE?")
         return resp
 
     def set_trigger_source(self, source: TriggerSource):
-        resp = self.em.query(f"TRIGGER:SOURCE {source}")
-        if self.query_succeded(resp, "set trigger source"):
-            logger.info(f"Setting trigger source to {source}")
-            return
-        return resp
+        self.send_command(f"TRIGGER:SOURCE {source}")
 
     def get_trigger_source(self):
-        resp = self.em.query("TRIGGER:SOURCE?")
-        if self.query_succeded(resp, "set trigger source"):
-            logger.info("Getting trigger source")
-            return resp
-        return resp
+        return self.send_command("TRIGGER:SOURCE?")
 
     def set_trigger_slope(self, slope: TriggerSlope):
-        resp = self.em.query(f"TRIGGER:SLOPE {slope}")
-        if self.query_succeded(resp, "set trigger slope"):
-            logger.info(f"Setting trigger slope to {slope}")
-            return
-        return resp
+        self.send_command(f"TRIGGER:SLOPE {slope}")
 
     def get_trigger_slope(self):
-        resp = self.em.query("TRIGGER:SLOPE?")
-        if self.query_succeded(resp, "set trigger slope"):
-            logger.info("Getting trigger slope")
-            return resp
-        return resp
+        return self.send_command("TRIGGER:SLOPE?")
 
     def set_wavelength(self, wl: float):
         assert self.min_wl <= wl <= self.max_wl
-        resp = self.em.query(f"CONFIGURE:WAVELENGTH {wl}")
-        if self.query_succeded(resp, "set wavelength"):
-            logger.info(f"Setting wavelength to {wl}")
-            return
-        return resp
+        self.send_command(f"CONFIGURE:WAVELENGTH {wl}")
 
     def get_wavelength(self):
-        resp = self.em.query("CONFIGURE:WAVELENGTH?")
-        if self.query_succeded(resp, "get wavelength"):
-            logger.info("Getting wavelength")
-            return
-        return resp
+        return self.send_command("CONFIGURE:WAVELENGTH?")
 
     def set_trigger_delay(self, delay: int):
         assert 0 <= delay <= 1000
-        resp = self.em.query(f"TRIGGER:DELAY {delay}")
-        if self.query_succeded(resp, "set trigger delay"):
-            logger.info(f"Setting trigger delay to {delay}")
-            return
-        return resp
+        self.send_command(f"TRIGGER:DELAY {delay}")
 
     def get_trigger_delay(self):
-        resp = self.em.query("TRIGGER:DELAY?")
-        if self.query_succeded(resp, "set trigger delay"):
-            logger.info("Getting trigger delay")
-            return resp
-        return resp
+        return self.send_command("TRIGGER:DELAY?")
 
     @property
     def min_wl(self):
@@ -119,9 +202,3 @@ class EnergyMaxUSB:
     @property
     def current_wl(self):
         return self._current_wl
-
-    def query_succeded(self, response: str, method_string: str) -> bool:
-        if response != "OK":
-            logger.error(f"Failed to {method_string} with response {response}")
-            return False
-        return True
