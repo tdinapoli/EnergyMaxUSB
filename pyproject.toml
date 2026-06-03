@@ -12,6 +12,17 @@ dependencies = [
     "pyvisa-py>=0.8.1",
     "zeroconf>=0.148.0",
 ]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX",
+    "Programming Language :: Python",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries",
+    "Programming Language :: Python :: 3.12",
+]
 
 [project.scripts]
 energymaxusb = "energymaxusb:main"
@@ -19,3 +30,35 @@ energymaxusb = "energymaxusb:main"
 [build-system]
 requires = ["uv_build>=0.9.17,<0.10.0"]
 build-backend = "uv_build"
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["linux-64", "osx-arm64", "win-64"]
+
+[tool.pixi.dependencies]
+python = "3.12.*"
+
+[tool.pixi.feature.lint.tasks]
+pre-commit-install = "pre-commit install"
+lint = "pre-commit run"
+
+[tool.pixi.environments]
+dev = { features = ["dev"], no-default-feature = true }
+lint = { features = ["lint"], no-default-feature = true }
+
+[tool.pixi.feature.dev.dependencies]
+python = "3.12.*"
+uv = "*"
+pixi-pack = "*"
+
+[tool.pixi.feature.lint.dependencies]
+python = "==3.12"
+pre-commit = "*"
+pre-commit-hooks = "*"
+taplo = "*"
+ruff = "*"
+mdformat = "*"
+mdformat-ruff = "*"
+
+[tool.ruff.lint]
+extend-select = ["I"]
