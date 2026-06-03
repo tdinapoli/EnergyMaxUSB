@@ -27,17 +27,19 @@ class ReadDict(TypedDict, total=False):
 
 
 class EnergyMaxUSB:
-    def __init__(self, em: MessageBasedResource, model: str, serial: str) -> None:
-        self.em = em
+    def __init__(
+        self, em_resource: MessageBasedResource, model: str, serial: str
+    ) -> None:
+        self.em_resource = em_resource
 
-        self.model = self.send_command("SYSTEM:INFORMATION:MODEL?")
+        self.model = self.query("SYSTEM:INFORMATION:MODEL?")
         assert self.model == model
-        self.serial = self.send_command("SYSTEM:INFORMATION:SNUMBER?")
+        self.serial = self.query("SYSTEM:INFORMATION:SNUMBER?")
         assert self.serial == serial
 
-        self._min_wl = int(self.send_command("CONFIGURE:WAVELENGTH? MINIMUM"))
-        self._max_wl = int(self.send_command("CONFIGURE:WAVELENGTH? MAXIMUM"))
-        self._current_wl = self.send_command("CONFIGURE:WAVELENGTH?")
+        self._min_wl = int(self.query("CONFIGURE:WAVELENGTH? MINIMUM"))
+        self._max_wl = int(self.query("CONFIGURE:WAVELENGTH? MAXIMUM"))
+        self._current_wl = self.query("CONFIGURE:WAVELENGTH?")
         self.set_measure_type("J")
 
         # TODO: put this in a method
@@ -48,7 +50,9 @@ class EnergyMaxUSB:
 
     @classmethod
     def constructor_default(
-        cls, position: Literal["before_sample", "after_sample"] = "before_sample"
+        cls,
+        rm: pyvisa.ResourceManager,
+        position: Literal["before_sample", "after_sample"] = "before_sample",
     ):
         match position:
             case "before_sample":
@@ -63,29 +67,47 @@ class EnergyMaxUSB:
                 raise ValueError(
                     f"Invalid position {position}. Should be either before_sample or after_sample"
                 )
-        rm = pyvisa.ResourceManager("@py")
-        em: MessageBasedResource = rm.open_resource(resource_name)
+        em: MessageBasedResource = rm.open_resource(
+            resource_name,
+            read_termination=MessageBasedResource.CR + MessageBasedResource.LF,
+        )
         return cls(em, model, serial)
 
-    def send_command(self, command: str) -> str:
-        is_query = "?" in command.strip()
-        logger.info(f"sending command {command} to energy meter {self.serial}")
+    def _check_ok(self, ok: str, command: str) -> bool:
+        if ok.strip() != "OK":
+            try:
+                logger.error(
+                    f"failed to communicate command {command} to energy meter {self.serial}"
+                )
+            except AttributeError:
+                logger.info(
+                    f"failed to communicate command {command} to unknown energy meter"
+                )
+            return False
+        return True
 
-        self.em.write(command)
+    def query(self, command: str) -> str:
+        try:
+            logger.info(f"Sending query {command} to energy meter {self.serial}")
+        except AttributeError:
+            logger.info(f"Sending query {command} to unknown energy meter")
 
-        resp = ""
-        if is_query:
-            resp = self.em.read().strip()
-            success = self.em.read().strip()
-        else:
-            success = self.em.read().strip()
+        resp = self.em_resource.query(command)
+        ok = self.em_resource.read()
 
-        if success != "OK":
-            logger.error(
-                "failed to communicate command {command} to energy meter {self.serial}"
-            )
-            resp = ""
-        return resp
+        if self._check_ok(ok, command):
+            return resp
+        return ""
+
+    def write(self, command: str):
+        try:
+            logger.info(f"Sending write {command} to energy meter {self.serial}")
+        except AttributeError:
+            logger.info(f"Sending write {command} to unknown energy meter")
+
+        ok = self.em_resource.query(command)
+
+        self._check_ok(ok, command)
 
     def get_energy(self) -> float | None:
         read_dict = self.read()
@@ -111,16 +133,8 @@ class EnergyMaxUSB:
             f"Tried to get SEQ from read dict with keys {list(read_dict.keys())}"
         )
 
-    def get_sequence(self) -> int | None:
-        read_dict = self.read()
-        if "PULS" in read_dict.keys():
-            return read_dict["SEQ"]
-        logger.error(
-            f"Tried to get SEQ from read dict with keys {list(read_dict.keys())}"
-        )
-
     def read(self) -> ReadDict:
-        resp = self.send_command("READ?").split(",")
+        resp = self.query("READ?").split(",")
         read_values = self.get_read_values()
         read_dict: ReadDict = {}
         if "FLAG" in read_values:
@@ -153,43 +167,43 @@ class EnergyMaxUSB:
         if len(values) == 0 or len(values) > 4:
             logger.error(f"Invalid amount of values {len(values)}. Min 1, max 4")
             return
-        self.send_command(f"CONFIGURE:ITEMSELECT {','.join(values)}")
+        self.write(f"CONFIGURE:ITEMSELECT {','.join(values)}")
 
     def get_read_values(self):
-        return self.send_command("CONFIGURE:ITEMSELECT?")
+        return self.query("CONFIGURE:ITEMSELECT?")
 
     def set_measure_type(self, typ: MeasureType):
-        self.send_command(f"CONFIGURE:MEASURE:TYPE {typ}")
+        self.write(f"CONFIGURE:MEASURE:TYPE {typ}")
 
     def get_measure_type(self) -> str:
-        resp = self.send_command("CONFIGURE:MEASURE:TYPE?")
+        resp = self.query("CONFIGURE:MEASURE:TYPE?")
         return resp
 
     def set_trigger_source(self, source: TriggerSource):
-        self.send_command(f"TRIGGER:SOURCE {source}")
+        self.write(f"TRIGGER:SOURCE {source}")
 
     def get_trigger_source(self):
-        return self.send_command("TRIGGER:SOURCE?")
+        return self.query("TRIGGER:SOURCE?")
 
     def set_trigger_slope(self, slope: TriggerSlope):
-        self.send_command(f"TRIGGER:SLOPE {slope}")
+        self.write(f"TRIGGER:SLOPE {slope}")
 
     def get_trigger_slope(self):
-        return self.send_command("TRIGGER:SLOPE?")
+        return self.query("TRIGGER:SLOPE?")
 
     def set_wavelength(self, wl: float):
         assert self.min_wl <= wl <= self.max_wl
-        self.send_command(f"CONFIGURE:WAVELENGTH {wl}")
+        self.write(f"CONFIGURE:WAVELENGTH {wl}")
 
     def get_wavelength(self):
-        return self.send_command("CONFIGURE:WAVELENGTH?")
+        return self.query("CONFIGURE:WAVELENGTH?")
 
     def set_trigger_delay(self, delay: int):
         assert 0 <= delay <= 1000
-        self.send_command(f"TRIGGER:DELAY {delay}")
+        self.write(f"TRIGGER:DELAY {delay}")
 
     def get_trigger_delay(self):
-        return self.send_command("TRIGGER:DELAY?")
+        return self.query("TRIGGER:DELAY?")
 
     @property
     def min_wl(self):
