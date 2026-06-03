@@ -1,8 +1,8 @@
 import logging
 from typing import Literal, Optional, TypedDict
 
-from pyvisa.resources import MessageBasedResource
 import pyvisa
+from pyvisa.resources import MessageBasedResource
 
 logger = logging.getLogger(__name__)
 
