@@ -135,7 +135,7 @@ class EnergyMaxUSB:
 
     def read(self) -> ReadDict:
         resp = self.query("READ?").split(",")
-        read_values = self.get_read_values()
+        read_values = self.get_read_values().split(",")
         read_dict: ReadDict = {}
         if "FLAG" in read_values:
             flags = resp[read_values.index("FLAG")]
@@ -153,15 +153,25 @@ class EnergyMaxUSB:
             read_dict["FLAG"] = flags
 
         if "PULS" in read_values:
-            read_dict["PULS"] = float(read_values[read_values.index("PULS")])
+            read_dict["PULS"] = float(resp[read_values.index("PULS")])
 
         if "SEQ" in read_values:
-            read_dict["SEQ"] = int(read_values[read_values.index("SEQ")])
+            read_dict["SEQ"] = int(resp[read_values.index("SEQ")])
 
         if "PER" in read_values:
-            read_dict["PER"] = int(read_values[read_values.index("PER")])
+            read_dict["PER"] = int(resp[read_values.index("PER")])
 
         return read_dict
+
+    def read_energy(self) -> float:
+        reading = self.read()
+        try:
+            return reading["PULS"]
+        except KeyError:
+            logger.error(
+                f"Couldn't find PULS value in read dict {reading} from energy meter {self.serial}. Returning 0."
+            )
+            return 0.0
 
     def set_read_values(self, values: list[ReadValue]):
         if len(values) == 0 or len(values) > 4:
