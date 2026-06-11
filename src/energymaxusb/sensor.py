@@ -227,14 +227,20 @@ class EnergyMaxUSB:
     def get_trigger_delay(self):
         return self.query("TRIGGER:DELAY?")
 
-    def get_scale(self):
+    def get_scale(self) -> float:
         """
         returns the max value of the scale.
         the ranges for each model are the following:
         J-MB10-HE: 12 µJ to 20 mJ
         J-MB10-HE: 50 µJ to 50 mJ
         """
-        return self.query("CONFIGURE:RANGE:SELECT?")
+        try:
+            float(self.query("CONFIGURE:RANGE:SELECT?"))
+        except ValueError as e:
+            logger.error(
+                f"converting the return value of getting scale failed with error {e}. Returning the max value."
+            )
+        return 50
 
     def set_scale(self, range: Literal["MIN", "MAX"]):
         return self.query(f"CONFIGURE:RANGE:SELECT {range}")
