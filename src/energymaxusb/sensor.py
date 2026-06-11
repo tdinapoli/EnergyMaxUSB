@@ -59,18 +59,30 @@ class EnergyMaxUSB:
                 model = '"EM-USB J-10MB-HE"'
                 serial = '"0344D22R"'
                 resource_name = "ASRL6::INSTR"
+                return cls.constructor(rm, model, serial, resource_name)
             case "after_sample":
                 model = '"EM-USB J-25MB-HE"'
                 serial = '"0071F22R"'
                 resource_name = "ASRL5::INSTR"
+                return cls.constructor(rm, model, serial, resource_name)
             case _:
                 raise ValueError(
                     f"Invalid position {position}. Should be either before_sample or after_sample"
                 )
-        em: MessageBasedResource = rm.open_resource(
+
+    @classmethod
+    def constructor(
+        cls,
+        rm: pyvisa.ResourceManager,
+        model: str,
+        serial: str,
+        resource_name: str,
+    ):
+        em = rm.open_resource(
             resource_name,
             read_termination=MessageBasedResource.CR + MessageBasedResource.LF,
         )
+        assert isinstance(em, MessageBasedResource)
         return cls(em, model, serial)
 
     def _check_ok(self, ok: str, command: str) -> bool:
@@ -214,6 +226,18 @@ class EnergyMaxUSB:
 
     def get_trigger_delay(self):
         return self.query("TRIGGER:DELAY?")
+
+    def get_scale(self):
+        """
+        returns the max value of the scale.
+        the ranges for each model are the following:
+        J-MB10-HE: 12 µJ to 20 mJ
+        J-MB10-HE: 50 µJ to 50 mJ
+        """
+        return self.query("CONFIGURE:RANGE:SELECT?")
+
+    def set_scale(self, range: Literal["MIN", "MAX"]):
+        return self.query(f"CONFIGURE:RANGE:SELECT {range}")
 
     @property
     def min_wl(self):
