@@ -145,6 +145,13 @@ class EnergyMaxUSB:
             f"Tried to get SEQ from read dict with keys {list(read_dict.keys())}"
         )
 
+    def get_flags(self) -> list[Flags]:
+        try:
+            return list(self.read()["FLAG"])
+        except KeyError:
+            logger.error("Reading flags failed because value wasn't in response.")
+        return []
+
     def read(self) -> ReadDict:
         resp = self.query("READ?").split(",")
         read_values = self.get_read_values().split(",")
